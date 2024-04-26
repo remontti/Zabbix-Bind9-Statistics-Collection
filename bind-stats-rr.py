@@ -59,7 +59,7 @@ else:
         print("Unknown root tag: {}".format(root.ag), file=sys.stderr)
         print("ZBX_NOTSUPPORTED")
     # check the statistics version here
-    v = re.match('^(\d{1})\.', version)
+    v = re.match(r'^(\d{1})\.', version)
     version = int(v.group(1))
     if version < 0 or version > 3:
         print("Unsupported bind statistics version: {}".format(root.attrib), file=sys.stderr)
@@ -208,7 +208,7 @@ elif args.action == 'json':
     search = j['resolvercounter']
 
     for k in search:
-        key = re.findall('\+', k)
+        key = re.findall(r'\+', k)
         if key: 
             nkey = k.replace('+', 'PLUS')
             tmp['resolvercounter'][nkey] = search[k]
