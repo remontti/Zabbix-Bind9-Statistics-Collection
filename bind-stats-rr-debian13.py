@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 # __author__ = 'https://github.com/remontti/Zabbix-Bind9-Statistics-Collection'
 
-import argparse
 import json
 import os
 import sys
@@ -11,25 +10,49 @@ import re
 import http.client
 import xml.etree.ElementTree as ElementTree
 
-
 JSONFILE = "/tmp/zabbix/bindstats.json"
 CACHELIFE = 60
 
 
 def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "action",
-        help=(
-            "discoverzones | counter | zonecounter | zonemaintenancecounter | "
-            "resolvercounter | socketcounter | incounter | outcounter | json"
-        ),
-    )
-    parser.add_argument("-z", help="zone")
-    parser.add_argument("-c", help="counter name")
-    parser.add_argument("-p", help="bind stats port")
-    parser.add_argument("-m", help="add plus")
-    return parser.parse_args()
+    """
+    Parser simples para evitar qualquer SystemExit/traceback do argparse.
+    Uso:
+      bind-stats-rr.py <action> [-z zone] [-c counter] [-p port] [-m]
+    """
+    if len(sys.argv) < 2:
+        return {"action": None, "z": None, "c": None, "p": None, "m": False}
+
+    args = {
+        "action": sys.argv[1],
+        "z": None,
+        "c": None,
+        "p": None,
+        "m": False,
+    }
+
+    it = iter(sys.argv[2:])
+    for token in it:
+        if token == "-z":
+            try:
+                args["z"] = next(it)
+            except StopIteration:
+                break
+        elif token == "-c":
+            try:
+                args["c"] = next(it)
+            except StopIteration:
+                break
+        elif token == "-p":
+            try:
+                args["p"] = int(next(it))
+            except (StopIteration, ValueError):
+                args["p"] = None
+        elif token == "-m":
+            args["m"] = True
+        # qualquer outro parâmetro é ignorado silenciosamente
+
+    return args
 
 
 def load_cache():
@@ -41,8 +64,12 @@ def load_cache():
 
     try:
         with open(JSONFILE) as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
+            data = json.load(f)
+        # valida estrutura básica
+        if not isinstance(data, dict):
+            return None
+        return data
+    except Exception:
         # cache inexistente/corrompido → força nova coleta
         return None
 
@@ -92,11 +119,7 @@ def detect_stats_version(root) -> int:
 
 
 def build_cache_from_xml(content: bytes) -> dict:
-    try:
-        root = ElementTree.fromstring(content)
-    except ElementTree.ParseError as e:
-        raise RuntimeError(f"Failed to parse BIND statistics XML: {e}") from e
-
+    root = ElementTree.fromstring(content)
     version = detect_stats_version(root)
 
     j = {
@@ -214,7 +237,11 @@ def build_cache_from_xml(content: bytes) -> dict:
 
 
 def run_action(args, j):
-    action = args.action
+    action = args["action"]
+
+    if not action:
+        print("ZBX_NOTSUPPORTED")
+        return
 
     if action == "discoverzones":
         d = {
@@ -228,34 +255,30 @@ def run_action(args, j):
         return
 
     if action == "zonecounter":
-        if not (args.z and args.c):
-            print("Missing argument", file=sys.stderr)
+        if not (args["z"] and args["c"]):
             print("ZBX_NOTSUPPORTED")
             return
-        if args.z in j.get("zones", {}) and args.c in j["zones"][args.z]:
-            print(j["zones"][args.z][args.c])
+        if args["z"] in j.get("zones", {}) and args["c"] in j["zones"][args["z"]]:
+            print(j["zones"][args["z"]][args["c"]])
         else:
             print("ZBX_NOTSUPPORTED")
         return
 
     if action == "jsonzone":
-        if not args.z:
-            print("Missing argument", file=sys.stderr)
+        if not args["z"]:
             print("ZBX_NOTSUPPORTED")
             return
-        if args.z in j.get("zones", {}):
-            print(json.dumps(j["zones"][args.z]))
+        if args["z"] in j.get("zones", {}):
+            print(json.dumps(j["zones"][args["z"]]))
         else:
             print("ZBX_NOTSUPPORTED")
         return
 
     if action == "json":
-        # comportamento original: remover zones e tratar '+' em resolvercounter
         j_copy = dict(j)
         j_copy.pop("zones", None)
         search = j_copy.get("resolvercounter", {})
 
-        # renomeia chaves com '+' para 'PLUS'
         for k in list(search.keys()):
             if "+" in k:
                 nkey = k.replace("+", "PLUS")
@@ -264,20 +287,19 @@ def run_action(args, j):
         print(json.dumps(j_copy))
         return
 
-    # demais ações: counter, zonemaintenancecounter, resolvercounter, socketcounter, incounter, outcounter
-    if not args.c:
-        print("Missing argument", file=sys.stderr)
+    # demais ações: counter, zonemaintenancecounter, resolvercounter, socketcounter, incounter, outcounter, cache, memory
+    if not args["c"]:
         print("ZBX_NOTSUPPORTED")
         return
 
-    if action not in j or args.c not in j[action]:
+    if action not in j or args["c"] not in j[action]:
         print("ZBX_NOTSUPPORTED")
         return
 
-    if not args.m:
-        print(j[action][args.c])
+    if not args["m"]:
+        print(j[action][args["c"]])
     else:
-        key = f"{args.c}+"
+        key = f"{args['c']}+"
         print(j[action].get(key, "0"))
 
 
@@ -285,14 +307,7 @@ def main():
     args = parse_args()
 
     # Porta configurável
-    port = 58053
-    if args.p:
-        try:
-            port = int(args.p)
-        except ValueError:
-            print(f"Invalid port: {args.p}", file=sys.stderr)
-            print("ZBX_NOTSUPPORTED")
-            return
+    port = args["p"] if args["p"] else 58053
 
     j = load_cache()
     if j is None:
@@ -303,15 +318,13 @@ def main():
 
 
 if __name__ == "__main__":
+    # Qualquer erro aqui é convertido em saída controlada.
     try:
         main()
     except Exception:
-        # Nunca joga traceback no stdout (quebra JSON do Zabbix)
-        import traceback
-
-        traceback.print_exc(file=sys.stderr)
-        # Se for action=json, devolve JSON vazio, senão ZBX_NOTSUPPORTED
+        # Nada de traceback, nunca.
         if len(sys.argv) > 1 and sys.argv[1] == "json":
+            # item master JSON sempre recebe JSON válido
             print("{}")
         else:
             print("ZBX_NOTSUPPORTED")
